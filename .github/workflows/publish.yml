@@ -1,0 +1,64 @@
+name: Publish to npm
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  publish:
+    if: ${{ github.repository_owner == 'SnapSnap-LLC' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - run: npm ci --ignore-scripts
+      - run: npm test --if-present
+      - name: Publish the current main revision
+        shell: bash
+        run: |
+          main_ref=$(git ls-remote --exit-code origin refs/heads/main)
+          if [[ "${main_ref%%$'\t'*}" != "$GITHUB_SHA" ]]; then
+            echo "A newer main revision is available. Skipping this revision."
+            exit 0
+          fi
+
+          name=$(node -p 'require("./package.json").name')
+          version=$(node -p 'require("./package.json").version')
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected a stable package.json version, got $version"
+            exit 1
+          fi
+
+          # npm view lists versions in SemVer order.
+          highest=$(npm view "$name" versions --json --prefer-online |
+            jq -er 'map(select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))) | last')
+          published_commit=$(npm view "$name@$highest" gitHead --prefer-online)
+          if [[ "$published_commit" == "$GITHUB_SHA" ]]; then
+            echo "$name@$highest already contains this revision."
+            exit 0
+          fi
+
+          if [[ "$(printf '%s\n' "$version" "$highest" | sort -V | tail -n1)" == "$highest" ]]; then
+            npm version "$highest" --allow-same-version --no-git-tag-version --ignore-scripts
+            npm version patch --no-git-tag-version --ignore-scripts
+          fi
+
+          npm pkg set "gitHead=$GITHUB_SHA"
+          npm publish --access public
