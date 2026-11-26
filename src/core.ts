@@ -303,9 +303,12 @@ export class SkillHarborClient {
       },
     );
     if (!response.ok) return this.fail(response);
-    const length = Number(response.headers.get('content-length'));
-    if (!Number.isSafeInteger(length) || length <= 0 || length > MAX_ARCHIVE_BYTES)
+    // Some proxies stream the response without a Content-Length.
+    const contentLength = response.headers.get('content-length');
+    const length = contentLength === null ? null : Number(contentLength);
+    if (length !== null && (!Number.isSafeInteger(length) || length <= 0 || length > MAX_ARCHIVE_BYTES))
       throw new ClientError('包大小无效或超过 32 MiB。');
+    const limit = length ?? MAX_ARCHIVE_BYTES;
     if (response.headers.get('content-type')?.split(';')[0] !== 'application/zip')
       throw new ClientError('响应不是 ZIP。');
     const version = response.headers.get('x-skill-version');
@@ -325,13 +328,14 @@ export class SkillHarborClient {
       const part = await reader.read();
       if (part.done) break;
       total += part.value.byteLength;
-      if (total > length || total > MAX_ARCHIVE_BYTES) {
+      if (total > limit) {
         await reader.cancel();
-        throw new ClientError('下载内容超过声明大小。');
+        throw new ClientError(length === null ? '下载内容超过 32 MiB。' : '下载内容超过声明大小。');
       }
       chunks.push(part.value);
     }
-    if (total !== length) throw new ClientError('下载内容长度校验失败。');
+    if (total === 0) throw new ClientError('下载内容为空。');
+    if (length !== null && total !== length) throw new ClientError('下载内容长度校验失败。');
     const bytes = Buffer.concat(chunks);
     return verifyArchive(bytes, expectedHash, slug, version);
   }

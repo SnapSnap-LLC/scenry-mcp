@@ -1,6 +1,6 @@
 {
   "name": "scenry-mcp",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Scenry local stdio MCP server",
   "license": "UNLICENSED",
   "type": "module",
@@ -17,7 +17,8 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "test": "npm run build && node test/device-auth.mjs"
   },
   "engines": {
     "node": ">=20.19"
