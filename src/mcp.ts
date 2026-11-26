@@ -22,7 +22,7 @@ export function createMcpServer(client = new SkillHarborClient()): McpServer {
     { name: product.mcp, version: product.version },
     {
       instructions:
-        'Search this registry for skills the user can access. Inspect metadata and permissions before downloading. All downloads and updates share server-side user quotas regardless of client. Install only a user-selected skill and version; never execute downloaded scripts during installation. connect_account starts browser approval; poll connection_status after pollAfterSeconds. Never request or print access tokens. The local CLI and MCP share the credential for this service origin. Keyword/intent search is explicitly labeled; only provider-backed semantic mode is semantic search.',
+        'Search this registry for skills the user can access. Inspect metadata and permissions before downloading. All downloads and updates share server-side user quotas regardless of client. Install only a user-selected skill and version; never execute downloaded scripts during installation. For a signed-out account, call connect_account, show the user the verificationUri and matching userCode, and ask them to approve in their browser. Poll connection_status after pollAfterSeconds; if it is still pending, wait and keep the same code. After connection, resume the skill task. Never request or print access tokens. The local CLI and MCP share the credential for this service origin. Keyword/intent search is explicitly labeled; only provider-backed semantic mode is semantic search.',
     },
   );
   let pending: DeviceFlow | undefined;
@@ -133,9 +133,11 @@ export function createMcpServer(client = new SkillHarborClient()): McpServer {
     () =>
       safe(() =>
         serialAuth(async () => {
-          if (!pending || Date.now() >= pending.startedAt + pending.expiresIn * 1000)
+          let browserOpened = false;
+          if (!pending || Date.now() >= pending.startedAt + pending.expiresIn * 1000) {
             pending = await client.startDevice();
-          const browserOpened = await openBrowser(pending.verificationUri);
+            browserOpened = await openBrowser(pending.verificationUri);
+          }
           return {
             status: 'pending',
             userCode: pending.userCode,
@@ -159,12 +161,23 @@ export function createMcpServer(client = new SkillHarborClient()): McpServer {
     () =>
       safe(() =>
         serialAuth(async () => {
-          if (!pending) return { status: 'not_started' };
+          const flow = pending;
+          if (!flow) return { status: 'not_started' };
           try {
-            const status = await client.pollDevice(pending);
+            const status = await client.pollDevice(flow);
             if (status.status === 'connected') pending = undefined;
             return status;
           } catch (error) {
+            if (
+              error instanceof TypeError ||
+              (error instanceof DOMException && ['TimeoutError', 'NetworkError'].includes(error.name))
+            ) {
+              return {
+                status: 'pending',
+                retrying: true,
+                pollAfterSeconds: flow.interval,
+              };
+            }
             if (
               error instanceof ClientError &&
               ['expired_token', 'access_denied'].includes(error.code)
